@@ -1,0 +1,26 @@
+# Voice Terminal - 双向语音终端
+# 为命令行 AI 助手添加语音交互能力
+
+# MLX 框架 (Apple Silicon 加速)
+mlx>=0.15.0
+mlx-lm>=0.14.0
+mlx-whisper>=0.4.0
+
+# 音频处理
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# 系统工具
+psutil>=5.9.0
+
+# ModelScope (模型下载)
+modelscope>=1.18.0
+
+# TTS 模型 (可选,根据实际使用的模型调整)
+# qwen3-tts 相关依赖 (根据实际实现添加)
+torch>=2.0.0
+transformers>=4.35.0
+
+# 其他工具
+typing-extensions>=4.7.0
