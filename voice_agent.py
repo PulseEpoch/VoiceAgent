@@ -64,7 +64,7 @@ class VoiceTerminal:
         """启动 Whisper Server"""
         self.update_status("正在启动 Whisper Server...", "33")
         try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
+            script_dir = os.path.dirname(os.path.realpath(__file__))
             server_script = os.path.join(script_dir, "whisper_server.py")
             
             if not os.path.exists(server_script):
