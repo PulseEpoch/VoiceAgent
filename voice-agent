@@ -1,0 +1,3 @@
+#!/bin/bash
+cd /Volumes/data/project/agent-voice-shell
+exec python3 voice_agent.py "$@"
