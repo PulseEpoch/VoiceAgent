@@ -187,8 +187,15 @@ class VoiceTerminal:
                 text = result.text.strip()
                 
                 if text:
-                    os.write(self.master_fd, (text).encode('utf-8'))
-                    os.write(self.master_fd, b"\r\n")
+                    # 逐块写入文字，模拟用户打字，避免子进程丢字符
+                    text_bytes = text.encode('utf-8')
+                    chunk_size = 64
+                    for i in range(0, len(text_bytes), chunk_size):
+                        os.write(self.master_fd, text_bytes[i:i+chunk_size])
+                        time.sleep(0.01)
+                    # PTY 中用 \r 触发回车（line discipline 会将其转为 \n 传给子进程）
+                    time.sleep(0.05)
+                    os.write(self.master_fd, b"\r")
                 
                 self.is_transcribing = False
                 self.update_status("识别完成")
