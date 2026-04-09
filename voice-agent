@@ -1,3 +1,4 @@
 #!/bin/bash
-cd /Volumes/data/project/agent-voice-shell
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+cd "$SCRIPT_DIR"
 exec python3 voice_agent.py "$@"
