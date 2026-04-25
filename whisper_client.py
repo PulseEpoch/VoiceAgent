@@ -32,13 +32,29 @@ class WhisperClient:
             s.connect((self.host, self.port))
         return s
 
+    @staticmethod
+    def _recv_all(s: socket.socket) -> bytes:
+        """Read until the peer closes the connection."""
+        chunks = []
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     def transcribe(self, audio_data: np.ndarray) -> TranscriptionResult:
         s = self._connect()
         try:
-            audio_bytes = audio_data.tobytes() + b"<END>"
-            s.sendall(audio_bytes)
-            
-            response = s.recv(4096).decode('utf-8')
+            # Prefix with a 4-byte big-endian length so the server can find the
+            # exact message boundary without scanning binary audio data for a
+            # text sentinel (which could appear accidentally in float32 bytes).
+            audio_bytes = audio_data.tobytes()
+            length_prefix = len(audio_bytes).to_bytes(4, "big")
+            s.sendall(length_prefix + audio_bytes)
+            s.shutdown(socket.SHUT_WR)
+
+            response = self._recv_all(s).decode('utf-8')
             data = json.loads(response)
             return TranscriptionResult(
                 text=data.get("text", ""),
@@ -55,8 +71,9 @@ class WhisperClient:
             s = self._connect()
             metadata = json.dumps({"sample_rate": sample_rate, "dtype": "float32"})
             s.sendall(b"JSON:" + metadata.encode('utf-8') + b"<END>")
-            
-            response = s.recv(4096).decode('utf-8')
+            s.shutdown(socket.SHUT_WR)
+
+            response = self._recv_all(s).decode('utf-8')
             data = json.loads(response)
             s.close()
             return data.get("status") == "ok"

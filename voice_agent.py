@@ -4,6 +4,9 @@ import pty
 import tty
 import termios
 import select
+import signal
+import struct
+import fcntl
 import threading
 import time
 import queue
@@ -47,10 +50,35 @@ class VoiceTerminal:
         # 终端状态
         self.old_settings = None
         self.master_fd = None
+        self._child_pid = None
+        self._update_terminal_size()
+
+    def _update_terminal_size(self):
+        """Read current terminal dimensions and propagate to the PTY slave."""
         try:
             self.terminal_rows, self.terminal_cols = os.get_terminal_size()
-        except:
+        except OSError:
             self.terminal_rows, self.terminal_cols = 24, 80
+        if self.master_fd is not None:
+            winsize = struct.pack("HHHH", self.terminal_rows, self.terminal_cols, 0, 0)
+            try:
+                fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
+            except OSError:
+                pass
+
+    def _sigwinch_handler(self, signum, frame):
+        """Handle terminal resize: update dimensions and notify the child PTY."""
+        self._update_terminal_size()
+
+    def _sigchld_handler(self, signum, frame):
+        """Reap zombie child processes."""
+        try:
+            while True:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if pid <= 0:
+                    break
+        except ChildProcessError:
+            pass
 
     def check_dependencies(self):
         """检查并提示必要依赖"""
@@ -221,12 +249,19 @@ class VoiceTerminal:
         if not self.connect_whisper_server(): return
 
         # 创建伪终端
-        pid, self.master_fd = pty.fork()
+        self._child_pid, self.master_fd = pty.fork()
 
-        if pid == 0:  # 子进程
+        if self._child_pid == 0:  # 子进程
             os.execvp(self.command[0], self.command)
-        
-        # 父进程：配置终端为 Raw 模式以拦截按键
+
+        # 父进程：安装信号处理器
+        signal.signal(signal.SIGWINCH, self._sigwinch_handler)
+        signal.signal(signal.SIGCHLD, self._sigchld_handler)
+
+        # 将当前终端尺寸同步到 PTY
+        self._update_terminal_size()
+
+        # 配置终端为 Raw 模式以拦截按键
         self.old_settings = termios.tcgetattr(sys.stdin.fileno())
         tty.setraw(sys.stdin.fileno())
 

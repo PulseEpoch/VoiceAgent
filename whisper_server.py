@@ -111,37 +111,57 @@ class WhisperServer:
             
             return TranscriptionResult(text=f"[错误] {error_msg[:50]}")
 
+    @staticmethod
+    def _recv_exactly(s: socket.socket, n: int) -> bytes:
+        """Read exactly n bytes from socket, raising EOFError on premature close."""
+        buf = b""
+        while len(buf) < n:
+            chunk = s.recv(n - len(buf))
+            if not chunk:
+                raise EOFError("Connection closed before expected bytes were received")
+            buf += chunk
+        return buf
+
+    @staticmethod
+    def _recv_until_end(s: socket.socket) -> bytes:
+        """Read bytes until the <END> sentinel is found (used for JSON ping only)."""
+        buf = b""
+        while b"<END>" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        return buf.split(b"<END>")[0]
+
     def _handle_client(self, client_socket: socket.socket):
-        buffer = b""
         try:
-            while self._running:
-                data = client_socket.recv(4096)
-                if not data:
-                    break
-                
-                buffer += data
-                
-                if b"<END>" in buffer:
-                    parts = buffer.split(b"<END>")
-                    audio_bytes = parts[0]
-                    buffer = b"<END>".join(parts[1:])
-                    
-                    if audio_bytes.startswith(b"JSON:"):
-                        metadata = json.loads(audio_bytes[5:].decode('utf-8'))
-                        sample_rate = metadata.get("sample_rate", 16000)
-                        dtype = metadata.get("dtype", "float32")
-                        response = json.dumps({"status": "ok", "sample_rate": sample_rate})
-                        client_socket.send(response.encode('utf-8'))
-                    else:
-                        audio_array = np.frombuffer(audio_bytes, dtype=np.float32)
-                        result = self.transcribe(audio_array)
-                        response = json.dumps({
-                            "text": result.text,
-                            "language": result.language,
-                            "status": "ok"
-                        })
-                        client_socket.send(response.encode('utf-8'))
-                        
+            # Peek at the first 5 bytes to distinguish message types:
+            #   "JSON:" → connection-check ping (legacy <END>-delimited)
+            #   4-byte big-endian length → binary audio frame (new framing)
+            header = self._recv_exactly(client_socket, 5)
+
+            if header.startswith(b"JSON:"):
+                # Connection-check: read the rest up to <END>
+                rest = self._recv_until_end(client_socket)
+                payload = header[5:] + rest
+                metadata = json.loads(payload.decode('utf-8'))
+                sample_rate = metadata.get("sample_rate", 16000)
+                response = json.dumps({"status": "ok", "sample_rate": sample_rate})
+                client_socket.sendall(response.encode('utf-8'))
+            else:
+                # Binary audio: first 4 bytes are big-endian payload length,
+                # 5th byte is the first byte of the audio payload.
+                payload_len = int.from_bytes(header[:4], "big")
+                audio_bytes = header[4:] + self._recv_exactly(client_socket, payload_len - 1)
+                audio_array = np.frombuffer(audio_bytes, dtype=np.float32)
+                result = self.transcribe(audio_array)
+                response = json.dumps({
+                    "text": result.text,
+                    "language": result.language,
+                    "status": "ok"
+                })
+                client_socket.sendall(response.encode('utf-8'))
+
         except Exception as e:
             print(f"[WhisperServer] 客户端处理错误: {e}")
         finally:
