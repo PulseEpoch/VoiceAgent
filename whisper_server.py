@@ -216,8 +216,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Whisper Server")
-    parser.add_argument("--model", default="mlx-community/whisper-tiny-mlx", 
-                       help="模型 ID (推荐使用 ModelScope: mlx-community/whisper-tiny-mlx)")
+    parser.add_argument("--model", default="mlx-community/whisper-medium-mlx",
+                       help="模型 ID (推荐: mlx-community/whisper-medium-mlx)")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
     parser.add_argument("--port", type=int, default=8765, help="监听端口")
     parser.add_argument("--socket", type=str, default=None, help="Unix socket 路径")
@@ -226,9 +226,8 @@ if __name__ == "__main__":
     
     # 显示推荐的 ModelScope 模型
     print("[WhisperServer] 推荐使用 ModelScope 模型（国内下载更快）:")
-    print("  - mlx-community/whisper-tiny-mlx")
-    print("  - mlx-community/whisper-base-mlx")
-    print("  - mlx-community/whisper-small-mlx")
+    print("  - mlx-community/whisper-medium-mlx  (推荐，高准确率)")
+    print("  - mlx-community/whisper-large-v3-mlx (最高准确率，较慢)")
     print("")
     
     server = WhisperServer(

@@ -1,7 +1,8 @@
 import socket
 import json
+import time
 import numpy as np
-from typing import Optional
+from typing import Optional, Callable
 from dataclasses import dataclass
 
 
@@ -17,11 +18,17 @@ class WhisperClient:
         self,
         host: str = "127.0.0.1",
         port: int = 8765,
-        socket_path: Optional[str] = None
+        socket_path: Optional[str] = None,
+        max_retries: int = 3,
+        retry_delay: float = 0.5,
+        on_reconnect: Optional[Callable[[], bool]] = None
     ):
         self.host = host
         self.port = port
         self.socket_path = socket_path
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.on_reconnect = on_reconnect  # Callback to restart server if needed
 
     def _connect(self) -> socket.socket:
         if self.socket_path:
@@ -44,42 +51,74 @@ class WhisperClient:
         return b"".join(chunks)
 
     def transcribe(self, audio_data: np.ndarray) -> TranscriptionResult:
-        s = self._connect()
-        try:
-            # Prefix with a 4-byte big-endian length so the server can find the
-            # exact message boundary without scanning binary audio data for a
-            # text sentinel (which could appear accidentally in float32 bytes).
-            audio_bytes = audio_data.tobytes()
-            length_prefix = len(audio_bytes).to_bytes(4, "big")
-            s.sendall(length_prefix + audio_bytes)
-            s.shutdown(socket.SHUT_WR)
+        """Transcribe audio with automatic retry and reconnection on failure."""
+        last_error = None
 
-            response = self._recv_all(s).decode('utf-8')
-            data = json.loads(response)
-            return TranscriptionResult(
-                text=data.get("text", ""),
-                language=data.get("language"),
-                status=data.get("status", "ok")
-            )
-        except Exception as e:
-            return TranscriptionResult(text=f"[错误] {str(e)}", status="error")
-        finally:
-            s.close()
-
-    def check_connection(self, sample_rate: int = 16000) -> bool:
-        try:
-            s = self._connect()
+        for attempt in range(self.max_retries):
             try:
-                metadata = json.dumps({"sample_rate": sample_rate, "dtype": "float32"})
-                s.sendall(b"JSON:" + metadata.encode('utf-8') + b"<END>")
-                s.shutdown(socket.SHUT_WR)
-                response = self._recv_all(s).decode('utf-8')
-                data = json.loads(response)
-                return data.get("status") == "ok"
-            finally:
-                s.close()
-        except Exception:
-            return False
+                s = self._connect()
+                try:
+                    # Prefix with a 4-byte big-endian length so the server can find the
+                    # exact message boundary without scanning binary audio data for a
+                    # text sentinel (which could appear accidentally in float32 bytes).
+                    audio_bytes = audio_data.tobytes()
+                    length_prefix = len(audio_bytes).to_bytes(4, "big")
+                    s.sendall(length_prefix + audio_bytes)
+                    s.shutdown(socket.SHUT_WR)
+
+                    response = self._recv_all(s).decode('utf-8')
+                    data = json.loads(response)
+                    return TranscriptionResult(
+                        text=data.get("text", ""),
+                        language=data.get("language"),
+                        status=data.get("status", "ok")
+                    )
+                finally:
+                    s.close()
+
+            except (ConnectionRefusedError, ConnectionResetError, BrokenPipeError,
+                    OSError) as e:
+                last_error = e
+
+                # On connection failure, try to reconnect via callback
+                if self.on_reconnect and attempt < self.max_retries - 1:
+                    if self.on_reconnect():
+                        # Server was restarted, wait a bit then retry
+                        time.sleep(self.retry_delay * (attempt + 1))
+                        continue
+
+                # If no callback or callback failed, still retry with delay
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay * (attempt + 1))
+
+            except Exception as e:
+                last_error = e
+                break
+
+        return TranscriptionResult(text=f"[错误] {str(last_error)}", status="error")
+
+    def check_connection(self, sample_rate: int = 16000, retry: bool = False) -> bool:
+        """Check if server is reachable. If retry=True and on_reconnect is set,
+        attempt to restart server on failure."""
+        for attempt in range(self.max_retries if retry else 1):
+            try:
+                s = self._connect()
+                try:
+                    metadata = json.dumps({"sample_rate": sample_rate, "dtype": "float32"})
+                    s.sendall(b"JSON:" + metadata.encode('utf-8') + b"<END>")
+                    s.shutdown(socket.SHUT_WR)
+                    response = self._recv_all(s).decode('utf-8')
+                    data = json.loads(response)
+                    return data.get("status") == "ok"
+                finally:
+                    s.close()
+            except Exception:
+                if retry and self.on_reconnect and attempt < self.max_retries - 1:
+                    if self.on_reconnect():
+                        time.sleep(self.retry_delay * (attempt + 1))
+                        continue
+                break
+        return False
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ class VoiceTerminal:
         whisper_host: str = "127.0.0.1",
         whisper_port: int = 8765,
         whisper_socket: Optional[str] = None,
-        whisper_model: str = "mlx-community/whisper-tiny-mlx",
+        whisper_model: str = "mlx-community/whisper-medium-mlx",
         auto_start_server: bool = True
     ):
         self.command = command
@@ -38,6 +38,7 @@ class VoiceTerminal:
         self.auto_start_server = auto_start_server
         self.client: Optional[WhisperClient] = None
         self.server_process: Optional[subprocess.Popen] = None
+        self._reconnecting = False  # Prevent nested reconnection attempts
         
         # 音频配置 (Whisper 强制要求 16kHz)
         self.fs = 16000
@@ -145,6 +146,39 @@ class VoiceTerminal:
         except Exception:
             return False
 
+    def _handle_server_failure(self) -> bool:
+        """Callback for when server connection fails. Attempts to restart the server.
+        Returns True if server was successfully restarted."""
+        if self._reconnecting:
+            return False
+
+        self._reconnecting = True
+        try:
+            self.update_status("Server 断开，正在重连...", "33", inline=True)
+
+            # Clean up old server process if it exists
+            if self.server_process:
+                try:
+                    self.server_process.terminate()
+                    self.server_process.wait(timeout=2)
+                except:
+                    try:
+                        self.server_process.kill()
+                    except:
+                        pass
+                self.server_process = None
+
+            # Restart the server
+            if self.auto_start_server and self.start_whisper_server():
+                self.update_status("Server 已重连", "32", inline=True)
+                return True
+
+            self.update_status("Server 重连失败", "31", inline=True)
+            return False
+
+        finally:
+            self._reconnecting = False
+
     def connect_whisper_server(self) -> bool:
         """连接 Whisper Server，失败时自动启动"""
         self.update_status("正在连接 Whisper Server...", "33")
@@ -152,7 +186,10 @@ class VoiceTerminal:
             self.client = WhisperClient(
                 host=self.whisper_host,
                 port=self.whisper_port,
-                socket_path=self.whisper_socket
+                socket_path=self.whisper_socket,
+                max_retries=3,
+                retry_delay=0.5,
+                on_reconnect=self._handle_server_failure
             )
             if self.client.check_connection(self.fs):
                 self.update_status("已连接 Whisper Server", "32")
@@ -166,10 +203,13 @@ class VoiceTerminal:
                         self.client = WhisperClient(
                             host=self.whisper_host,
                             port=self.whisper_port,
-                            socket_path=self.whisper_socket
+                            socket_path=self.whisper_socket,
+                            max_retries=3,
+                            retry_delay=0.5,
+                            on_reconnect=self._handle_server_failure
                         )
                         return True
-                
+
                 self.update_status("Whisper Server 连接失败", "31")
                 return False
         except Exception as e:
@@ -180,10 +220,13 @@ class VoiceTerminal:
                     self.client = WhisperClient(
                         host=self.whisper_host,
                         port=self.whisper_port,
-                        socket_path=self.whisper_socket
+                        socket_path=self.whisper_socket,
+                        max_retries=3,
+                        retry_delay=0.5,
+                        on_reconnect=self._handle_server_failure
                     )
                     return True
-            
+
             self.update_status(f"连接失败: {str(e)[:20]}...", "31")
             return False
 
@@ -377,8 +420,8 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="127.0.0.1", help="Whisper server host")
     parser.add_argument("--port", type=int, default=8765, help="Whisper server port")
     parser.add_argument("--socket", type=str, default=None, help="Unix socket path")
-    parser.add_argument("--model", default="mlx-community/whisper-small-mlx", 
-                       help="Whisper model (推荐 ModelScope: mlx-community/whisper-tiny-mlx)")
+    parser.add_argument("--model", default="mlx-community/whisper-medium-mlx",
+                       help="Whisper model (推荐: mlx-community/whisper-medium-mlx)")
     parser.add_argument("--no-auto-start", action="store_true", help="Disable auto-start server")
     parser.add_argument("command", nargs="*", help="Command to run (default: $SHELL)")
 
