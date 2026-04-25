@@ -54,13 +54,16 @@ class VoiceTerminal:
         self._update_terminal_size()
 
     def _update_terminal_size(self):
-        """Read current terminal dimensions and propagate to the PTY slave."""
+        """Read current terminal dimensions and propagate to the PTY slave.
+        The PTY gets one fewer row to reserve the status bar line."""
         try:
-            self.terminal_rows, self.terminal_cols = os.get_terminal_size()
+            size = os.get_terminal_size()
+            self.terminal_rows, self.terminal_cols = size.lines, size.columns
         except OSError:
             self.terminal_rows, self.terminal_cols = 24, 80
         if self.master_fd is not None:
-            winsize = struct.pack("HHHH", self.terminal_rows, self.terminal_cols, 0, 0)
+            pty_rows = max(1, self.terminal_rows - 1)
+            winsize = struct.pack("HHHH", pty_rows, self.terminal_cols, 0, 0)
             try:
                 fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
             except OSError:
@@ -279,18 +282,34 @@ class VoiceTerminal:
         if not self.check_dependencies(): return
         if not self.connect_whisper_server(): return
 
-        # 创建伪终端
-        self._child_pid, self.master_fd = pty.fork()
+        # 读取真实终端尺寸
+        self._update_terminal_size()
 
+        # 用 openpty 代替 pty.fork，先设好 slave 尺寸再 fork，
+        # 保证子进程启动时读到的 TIOCGWINSZ 已经是正确值
+        self.master_fd, slave_fd = pty.openpty()
+        pty_rows = max(1, self.terminal_rows - 1)
+        winsize = struct.pack("HHHH", pty_rows, self.terminal_cols, 0, 0)
+        fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+        self._child_pid = os.fork()
         if self._child_pid == 0:  # 子进程
+            os.close(self.master_fd)
+            # 让 slave 成为控制终端
+            os.setsid()
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+            # 把 slave 接到标准 I/O
+            for fd in (0, 1, 2):
+                os.dup2(slave_fd, fd)
+            if slave_fd > 2:
+                os.close(slave_fd)
             os.execvp(self.command[0], self.command)
 
-        # 父进程：安装信号处理器
+        # 父进程
+        os.close(slave_fd)
         signal.signal(signal.SIGWINCH, self._sigwinch_handler)
         signal.signal(signal.SIGCHLD, self._sigchld_handler)
-
-        # 将当前终端尺寸同步到 PTY
-        self._update_terminal_size()
 
         # 配置终端为 Raw 模式以拦截按键
         self.old_settings = termios.tcgetattr(sys.stdin.fileno())
@@ -362,10 +381,9 @@ if __name__ == "__main__":
                        help="Whisper model (推荐 ModelScope: mlx-community/whisper-tiny-mlx)")
     parser.add_argument("--no-auto-start", action="store_true", help="Disable auto-start server")
     parser.add_argument("command", nargs="*", help="Command to run (default: $SHELL)")
-    
-    args = parser.parse_args()
-    
-    target_cmd = args.command if args.command else [os.environ.get("SHELL", "/bin/bash")]
+
+    args, extra = parser.parse_known_args()
+    target_cmd = (args.command + extra) if (args.command or extra) else [os.environ.get("SHELL", "/bin/bash")]
     
     app = VoiceTerminal(
         command=target_cmd,
