@@ -116,10 +116,14 @@ class VoiceTerminal:
             # 等待服务器启动
             for i in range(30):
                 time.sleep(0.5)
+                # 如果进程已崩溃，提前退出
+                if self.server_process.poll() is not None:
+                    self.update_status("Server 进程异常退出", "31")
+                    return False
                 if self._try_connect():
                     self.update_status("Server 已启动", "32")
                     return True
-            
+
             self.update_status("Server 启动超时", "31")
             return False
             
@@ -130,13 +134,12 @@ class VoiceTerminal:
     def _try_connect(self) -> bool:
         """尝试连接服务器"""
         try:
-            test_client = WhisperClient(
+            return WhisperClient(
                 host=self.whisper_host,
                 port=self.whisper_port,
                 socket_path=self.whisper_socket
-            )
-            return test_client.check_connection(self.fs)
-        except:
+            ).check_connection(self.fs)
+        except Exception:
             return False
 
     def connect_whisper_server(self) -> bool:
@@ -306,7 +309,10 @@ class VoiceTerminal:
                             data = data.replace(b'\x0b', b'')
 
                         if data:
-                            os.write(self.master_fd, data)
+                            try:
+                                os.write(self.master_fd, data)
+                            except OSError:
+                                break
                     except EOFError: break
 
                 if self.master_fd in rfds:

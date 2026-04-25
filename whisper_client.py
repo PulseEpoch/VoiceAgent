@@ -69,14 +69,15 @@ class WhisperClient:
     def check_connection(self, sample_rate: int = 16000) -> bool:
         try:
             s = self._connect()
-            metadata = json.dumps({"sample_rate": sample_rate, "dtype": "float32"})
-            s.sendall(b"JSON:" + metadata.encode('utf-8') + b"<END>")
-            s.shutdown(socket.SHUT_WR)
-
-            response = self._recv_all(s).decode('utf-8')
-            data = json.loads(response)
-            s.close()
-            return data.get("status") == "ok"
+            try:
+                metadata = json.dumps({"sample_rate": sample_rate, "dtype": "float32"})
+                s.sendall(b"JSON:" + metadata.encode('utf-8') + b"<END>")
+                s.shutdown(socket.SHUT_WR)
+                response = self._recv_all(s).decode('utf-8')
+                data = json.loads(response)
+                return data.get("status") == "ok"
+            finally:
+                s.close()
         except Exception:
             return False
 

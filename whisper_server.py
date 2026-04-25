@@ -152,7 +152,9 @@ class WhisperServer:
                 # Binary audio: first 4 bytes are big-endian payload length,
                 # 5th byte is the first byte of the audio payload.
                 payload_len = int.from_bytes(header[:4], "big")
-                audio_bytes = header[4:] + self._recv_exactly(client_socket, payload_len - 1)
+                # header[4:] already contains 1 byte of the payload; read the rest.
+                remaining = payload_len - len(header[4:])
+                audio_bytes = header[4:] + self._recv_exactly(client_socket, remaining)
                 audio_array = np.frombuffer(audio_bytes, dtype=np.float32)
                 result = self.transcribe(audio_array)
                 response = json.dumps({
