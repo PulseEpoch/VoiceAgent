@@ -4,6 +4,8 @@
 
 A PTY wrapper that adds voice interaction capabilities to command-line AI assistants (like Devin/Claude CLI).
 
+![Use Case](./voice-agent.png)
+
 ## Core Features
 
 - **Voice Input (STT)**: Hold Ctrl+K to record, release to transcribe to text via Whisper model, automatically injected into terminal input with carriage return to execute commands

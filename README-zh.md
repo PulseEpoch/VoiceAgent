@@ -2,6 +2,8 @@
 
 为命令行 AI 助手（如 Devin/Claude CLI）添加语音交互能力的 PTY wrapper。
 
+![使用场景](./voice-agent.png)
+
 ## 核心功能
 
 - **语音输入（STT）**：按住 Ctrl+K 录音，松开后通过 Whisper 模型转录为文字，自动注入到终端输入并执行命令
