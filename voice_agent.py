@@ -184,10 +184,41 @@ class VoiceTerminal:
             self.update_status(f"连接失败: {str(e)[:20]}...", "31")
             return False
 
-    def update_status(self, message: str, color_code: str = "32"):
-        """使用 ANSI 转义码在终端底部打印非侵入式状态栏"""
-        status_line = f"\x1b[s\x1b[{self.terminal_rows};1H\x1b[K\x1b[{color_code}m[MLX-Whisper] {message}\x1b[0m\x1b[u"
-        os.write(sys.stdout.fileno(), status_line.encode('utf-8'))
+    def update_status(self, message: str, color_code: str = "32", inline: bool = False):
+        """显示状态消息。
+        inline=True：写入倒数第二行状态栏（录音/识别等需要可见的提示）。
+        inline=False：写入窗口标题（次要信息，不占屏幕空间）。
+        """
+        fd = sys.stdout.fileno()
+        # 窗口标题始终更新
+        try:
+            os.write(fd, f"\x1b]0;[MLX-Whisper] {message}\x07".encode('utf-8'))
+        except OSError:
+            pass
+        if not inline:
+            return
+        # 倒数第二行状态栏：\x1b7 保存光标，\x1b8 恢复，不触发滚动
+        status_row = max(1, self.terminal_rows - 1)
+        bar = (
+            f"\x1b7"                                              # 保存光标（DEC）
+            f"\x1b[{status_row};1H\x1b[K"                        # 跳到状态行并清空
+            f"\x1b[{color_code}m[MLX-Whisper] {message}\x1b[0m"  # 写消息
+            f"\x1b8"                                              # 恢复光标（DEC）
+        )
+        try:
+            os.write(fd, bar.encode('utf-8'))
+        except OSError:
+            pass
+
+    def clear_status(self):
+        """清除倒数第二行状态栏"""
+        fd = sys.stdout.fileno()
+        status_row = max(1, self.terminal_rows - 1)
+        try:
+            os.write(fd, f"\x1b7\x1b[{status_row};1H\x1b[K\x1b8".encode('utf-8'))
+            os.write(fd, b"\x1b]0;\x07")  # 重置窗口标题
+        except OSError:
+            pass
 
     def audio_callback(self, indata, frames, time_info, status):
         """录音实时回调"""
@@ -198,7 +229,7 @@ class VoiceTerminal:
     def process_voice(self):
         """触发 Whisper 异步转录"""
         self.is_transcribing = True
-        self.update_status("正在识别...", "35")
+        self.update_status("正在识别...", "35", inline=True)
         
         audio_data = []
         while not self.audio_queue.empty():
@@ -206,7 +237,6 @@ class VoiceTerminal:
         
         if not audio_data:
             self.is_transcribing = False
-            self.update_status("就绪")
             return
 
         # 合并所有音频片段
@@ -229,12 +259,10 @@ class VoiceTerminal:
                     os.write(self.master_fd, b"\r")
                 
                 self.is_transcribing = False
-                self.update_status("识别完成")
-                time.sleep(0.5)
-                self.update_status("就绪")
+                self.clear_status()
             except Exception as e:
                 self.is_transcribing = False
-                self.update_status(f"识别出错: {str(e)[:20]}...", "31")
+                self.update_status(f"识别出错: {str(e)[:20]}...", "31", inline=True)
 
         threading.Thread(target=run_inference, daemon=True).start()
 
@@ -273,7 +301,7 @@ class VoiceTerminal:
         finally:
             # 退出时恢复终端设置并清理状态栏
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.old_settings)
-            os.write(sys.stdout.fileno(), f"\x1b[{self.terminal_rows};1H\x1b[K".encode())
+            self.clear_status()
             # 清理服务器进程
             self.cleanup()
 
@@ -300,7 +328,7 @@ class VoiceTerminal:
                         if b'\x0b' in data:
                             if not self.is_recording:
                                 self.is_recording = True
-                                self.update_status("录音中 (松开 Ctrl+K 停止)...", "31")
+                                self.update_status("录音中 (松开 Ctrl+K 停止)...", "31", inline=True)
                                 # 开启新录音前清空旧缓存
                                 while not self.audio_queue.empty(): self.audio_queue.get()
                             
